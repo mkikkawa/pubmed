@@ -1,0 +1,194 @@
+#!/usr/bin/env ruby
+# coding: utf-8
+# This command require external ruby libraries.
+# To install them, do the following command once:
+#   sudo gem install rb-fsevent bio terminal-notifier
+
+require 'etc'
+require 'fileutils'
+require 'rubygems'
+require 'rb-fsevent'
+require 'bio'
+require 'socket'
+require 'optparse'
+
+# Person/Site specific values =========================================
+$pdf_dir = Etc.getpwuid.dir + "/Google\ Drive/iPubMed/"
+$download_dir = "/Downloads/pdf/"
+$my_email_address = "mkikkawa@gmail.com"
+$ip_addresses_for_sync = /192\.168\.11\./
+$pubmed_max_n = 1000
+# === opt parse ========================================================
+$renew = false
+$suppl = false
+
+opt = OptionParser.new
+
+
+opt.on('-r', '--renew', 'Renew the PDF file of pubmed ID  usage: pubmed -r [pubmedID]'){
+  $renew = true
+}
+
+opt.on('-s', '--supplementary', 'Open the supplementary files folder  usage: pubmed -s [pubmedID]'){
+  $suppl = true
+  # not yet implemented
+}
+
+
+
+opt.parse!(ARGV)
+#====================================================================
+
+
+
+def my_address
+ udp = UDPSocket.new
+ # クラスBの先頭アドレス,echoポート 実際にはパケットは送信されない。
+ udp.connect("128.0.0.0", 7)
+ adrs = Socket.unpack_sockaddr_in(udp.getsockname)[1]
+ udp.close
+ adrs
+end
+
+
+
+
+class WatchDirController
+  def initialize
+    @download_dir = Etc.getpwuid.dir + $download_dir
+    @copyText = ""
+    @refInfo  = ""
+    $currentRecordController = self
+    @fsevent = nil
+    @thread = nil
+  end
+
+  def watchDir(dir, pubmedID)
+    if( dir ) then
+      @dir  = dir
+      @list = Dir.entries( @dir ) # Record the content of directory
+      #p @list
+      if( @thread ) then
+        @fsevent.stop
+        Thread::kill(@thread)
+      end
+      @fsevent = FSEvent.new
+      #  Event handler
+      @fsevent.watch dir do |directories|
+        newlist = Dir.entries(@dir)
+        diff = newlist - @list
+        if( diff.length > 0 ) then
+          filename = diff[0]
+          dest_filename = $pdf_dir + pubmedID.to_s + ".pdf"
+          if( File.exists?(dir + filename) && FileUtils.mv(dir + filename,dest_filename) ) then
+            system("terminal-notifier -contentImage /Users/mkikkawa/Programs/iPubMed/icon/iPubMed.icns -message \"#{filename} was moved to iPubMed directory\" ")
+            if( my_address =~ $ip_addresses_for_sync ) then
+              pid = Process.spawn "pdfsync"
+            end
+            exec '/usr/bin/open', "#{$pdf_dir}#{pubmedID}.pdf"
+            @fsevent.stop
+          end
+        end
+        @list = newlist
+      end
+      
+      @fsevent.run
+    end # if (dir) end
+  end
+  
+  def onpdf(pubmedID)
+    @wdc = watchDir(@download_dir, pubmedID)
+  end
+end
+
+#########################################################################
+def search_by_query(query)
+  options = { 'retmax' => $pubmed_max_n } # return ref number 
+  Bio::NCBI.default_email = $my_email_address
+  
+  
+  begin
+    items = Bio::PubMed.esearch(query,options)
+  rescue
+    printf("connection error\n")
+    exit
+  end
+  
+  counter = 1
+  
+  record_array = Bio::PubMed.efetch(items,options)
+  record_array.each{ |record|
+    ref = Bio::MEDLINE.new(record)
+    pubmedID = ref.pmid
+    
+    printf("%d. %s\n   ", counter, ref.title)
+    
+    if( ref.authors.class == String ) then
+    # do nothing
+    else
+      # Green:
+      # "\033[32m" +
+      text = 
+        ref.authors.join(", ") + "\n   " + 
+        ref.journal  + "  " + ref.year + " " + 
+        ref.volume + ":" + ref.pages
+    end
+    printf("%s\n   ",text)
+    
+    # for LaTeX
+    first_author = ref.authors[0]
+    /([\-\w]+),/ =~ first_author
+    first_author = $1
+    if( first_author ) then
+    # do nothing
+    else
+      first_author = ""
+    end
+
+    printf(" %s_%d_%d %d \n",first_author, ref.year, pubmedID, pubmedID)
+
+    if( File.exists?("#{$pdf_dir}#{pubmedID}.pdf") ) then
+      printf(" <pdf>\n",pubmedID)
+    end
+    printf("\n")
+    counter += 1
+  }
+  if (record_array.size == 1 ) then
+    pubmedID = Bio::MEDLINE.new(record_array[0]).pmid
+    if( File.exists?( $pdf_dir + pubmedID.to_s + ".pdf") && $renew == false ) then
+      exec '/usr/bin/open', "#{$pdf_dir}#{pubmedID}.pdf"
+#      system( "/usr/bin/open #{$pdf_dir}#{pubmedID}.pdf" )
+    end
+  end
+end
+
+
+
+##########################################################################
+# help
+if( ARGV.size < 1 ) then
+  printf("Usage: pubmed <pubmedID> or pubmed \"query\"\n")
+  exit
+end
+
+
+if( ARGV[0] =~ /[0-9][0-9][0-9][0-9][0-9][0-9]+/ ) then
+  # Incorporate the specified pubmedID paper or open it if exists:
+  pubmedID = ARGV[0].to_i
+  watch = WatchDirController.new
+  
+  if( pubmedID && pubmedID > 0 ) then
+    if( File.exists?( "#{$pdf_dir}#{pubmedID}.pdf") && $renew == false ) then
+#      system( "/usr/bin/open #{$pdf_dir}#{pubmedID}.pdf" )
+      search_by_query(ARGV[0])
+      exec '/usr/bin/open', "#{$pdf_dir}#{pubmedID}.pdf"
+    else
+      system("open \"https://eutils.ncbi.nlm.nih.gov/entrez/eutils/elink.fcgi?dbfrom=pubmed&id=#{ARGV[0]}&retmode=ref&cmd=prlinks\"")
+      watch.onpdf(pubmedID)
+    end
+  end
+else
+  #if ARGV is a query
+  search_by_query(ARGV[0])
+end
+
