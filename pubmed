@@ -3,6 +3,8 @@
 # This command require external ruby libraries.
 # To install them, do the following command once:
 #   sudo gem install rb-fsevent bio terminal-notifier
+# terminal notifier can be also installed as
+# brew install terminal-notifier
 
 require 'etc'
 require 'fileutils'
@@ -13,11 +15,8 @@ require 'socket'
 require 'optparse'
 
 # Person/Site specific values =========================================
-$pdf_dir = Etc.getpwuid.dir + "/Google\ Drive/iPubMed/"
-$download_dir = "/Downloads/pdf/"
-$my_email_address = "your@email.address.com"
-$ip_addresses_for_sync = /192\.168\.11\./ # This address is used to distinguish whether you are on the local network.
-$pubmed_max_n = 1000
+scriptDir = File.dirname(__FILE__)
+require (scriptDir + "/pubmed-setting.rb")
 # === opt parse ========================================================
 $renew = false
 $suppl = false
@@ -67,7 +66,7 @@ class WatchDirController
     if( dir ) then
       @dir  = dir
       @list = Dir.entries( @dir ) # Record the content of directory
-      #p @list
+
       if( @thread ) then
         @fsevent.stop
         Thread::kill(@thread)
@@ -80,11 +79,13 @@ class WatchDirController
         if( diff.length > 0 ) then
           filename = diff[0]
           dest_filename = $pdf_dir + pubmedID.to_s + ".pdf"
-          if( File.exists?(dir + filename) && FileUtils.mv(dir + filename,dest_filename) ) then
+          if( File.exists?(dir + filename) ) then
+            FileUtils.mv(dir + filename,dest_filename)
             system("terminal-notifier -contentImage /Users/mkikkawa/Programs/iPubMed/icon/iPubMed.icns -message \"#{filename} was moved to iPubMed directory\" ")
-            if( my_address =~ $ip_addresses_for_sync ) then
-              pid = Process.spawn "pdfsync"
-            end
+            # pdf sync was removed.
+            #if( my_address =~ $ip_addresses_for_sync ) then
+            #  pid = Process.spawn "pdfsync"
+            #end
             exec '/usr/bin/open', "#{$pdf_dir}#{pubmedID}.pdf"
             @fsevent.stop
           end
@@ -97,7 +98,7 @@ class WatchDirController
   end
   
   def onpdf(pubmedID)
-    @wdc = watchDir(@download_dir, pubmedID)
+    watchDir(@download_dir, pubmedID)
   end
 end
 
@@ -172,7 +173,7 @@ if( ARGV.size < 1 ) then
 end
 
 
-if( ARGV[0] =~ /[0-9][0-9][0-9][0-9][0-9][0-9]+/ ) then
+if( ARGV[0] =~ /[0-9][0-9][0-9][0-9][0-9]+/ ) then
   # Incorporate the specified pubmedID paper or open it if exists:
   pubmedID = ARGV[0].to_i
   watch = WatchDirController.new
